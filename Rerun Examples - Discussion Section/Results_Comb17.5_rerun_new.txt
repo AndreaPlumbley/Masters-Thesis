@@ -1,0 +1,10 @@
+lp_toc c(elapsed = 3.052)
+lp_toc c(elapsed = 3.105)
+lp_toc logical(0)
+lp_toc 0.053 sec elapsed
+t1: 2024-12-07 16:55:50
+t2: 2024-12-07 23:31:40
+toc_end: c(elapsed = 22.288)
+toc_end: c(elapsed = 23772.573)
+toc_end: logical(0)
+toc_end: 23750.285 sec elapsed
