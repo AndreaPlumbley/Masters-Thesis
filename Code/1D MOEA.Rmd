@@ -1,0 +1,813 @@
+---
+title: "1D_MOEA"
+author: "Andrea Plumbley, PLMAND002"
+date: "2024-06-13"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, fast-non-dom-sort}
+
+dominates = function(p, q, P){
+  num_objectives = dim(P)[2] - 1   # Calculate the number of objectives
+  p_obj_values = P[p,-1]           # Extract the obj vals for sol p
+  q_obj_values = P[q,-1]           # Extract the obj vals for sol q
+  
+  # Initially set the boolean to FALSE
+  p_dominates_q = FALSE
+  
+  # For each objective compare the obj vals of p and q
+  # If p has any obj vals > than obj vals of q, p cannot dominate q and FALSE
+  # is returned by the function immediately. 
+  
+  for (i in 1:num_objectives) {
+    if (p_obj_values[i] > q_obj_values[i]) {
+      return(FALSE)                       
+    } else if (p_obj_values[i] < q_obj_values[i]) {
+      p_dominates_q = TRUE
+    }
+  }
+  return(p_dominates_q)
+}
+
+
+dominates_with_constrained_dom = function(p, q, P){
+  num_col = dim(P)[2]
+  num_objectives = num_col - 2   # Calculate the number of objectives
+  p_obj_values = P[p, -c(1, num_col)] # Extract the obj vals for sol p
+  q_obj_values = P[q, -c(1, num_col)] # Extract the obj vals for sol q
+  
+  p_constraint_val = P[p, num_col]
+  q_constraint_val = P[q, num_col]
+  
+  # Initially set the boolean to FALSE
+  p_dominates_q = FALSE
+  
+  if(p_constraint_val>q_constraint_val){
+    return(FALSE)
+  } else if(p_constraint_val<q_constraint_val){
+    return(TRUE)
+  }else{
+    # For each objective compare the obj vals of p and q
+    # If p has any obj vals > than obj vals of q, p cannot dominate q and FALSE
+    # is returned by the function immediately. 
+    for (i in 1:num_objectives) {
+      if (p_obj_values[i] > q_obj_values[i]) {
+        return(FALSE)                       
+      } else if (p_obj_values[i] < q_obj_values[i]) {
+        p_dominates_q = TRUE
+      }
+    }
+  }  
+  return(p_dominates_q)
+}
+
+
+fast_non_dom_sort = function(P){
+  # P must be a matrix containing solutions' objective function values.  
+  # P does not contain the actual solution gene representation (for GBPP) or 
+  # solution parameters for a general problem. 
+  # The first column of P contains an index of the solutions and the remaining
+  # columns are the objective function values for that solution for the m
+  # objectives. Number of objectives = m = num columns in P - 1
+  
+  num_solutions = dim(P)[1]         # Get the number of solutions
+  num_objectives = dim(P)[2] - 1    # Get the number of objectives
+  
+  rank = rep(NA, num_solutions)     #Space to store rank of each solution
+  
+  #Store the sets of solutions dominated by p in a list
+  # S[[p]] gives set of solutions dominated by p
+  S = list()                       
+  
+  F_1 = c()     #F_1 is empty first non-dominated front
+  
+  non_dom_count = c()    #Vector to store non-domination counts for each sol
+  
+  
+  # First for loop calculates a solutions n_p and S_p
+  
+  for(p in 1:num_solutions){
+    S_p = c() #Set S_p to initially be empty
+    n_p = 0   #Set initial domination count to 0 
+    for(q in 1:num_solutions){ #Inner loop to compare all sols with each other
+      if(dominates_with_constrained_dom(p, q, P)){
+        S_p = c(S_p, q)   #Add solution q to the set S_p if p dominates q
+      }else if (dominates_with_constrained_dom(q, p, P)){
+        n_p = n_p + 1   #Increment the domination count of p if q dominates p
+      }
+    }
+    # If domination count is zero then solution is in the first front
+    # For all solutions where n_p=0, assign sol a rank of 1 and add it to F1
+    if(n_p == 0){       
+      rank[p] = 1
+      F_1 = c(F_1, p)
+    }
+    # Add the domination count and set of sols p dominates to the stored vector
+    # non_dom_count and list S. If S_p remained empty assign 0 to S[[p]]
+    non_dom_count = c(non_dom_count, n_p)
+    if(is.null(S_p)){ 
+      S[[p]] = 0
+    } else {
+      S[[p]] = S_p
+    }
+  }
+  
+  # Create a list, Fronts, which stored the solutions in each non-dominated
+  # front. Eg Fronts[[1]] contains vector of solutions in first front. 
+  Fronts = list()
+  Fronts[[1]] = F_1
+  
+  # The second loop is a while loop with a boolean variable that checks if 
+  # there are still remaining solutions in the next front. The boolean indicates
+  # if we have assigned all solutions to a front by giving them a rank. 
+  
+  # A initial check must first be done whether or not all solutions were in 
+  # the first front. 
+  
+  if(length(F_1) == dim(P)[1]){
+    next_front_not_empty = FALSE
+  }else{
+    next_front_not_empty = TRUE
+  }
+  
+  i = 1    #Initialize the front counter
+  while(next_front_not_empty){
+    Q = c()   #Create empty set which will contain solutions in the next front
+    # For each solution in the current front, get the solutions that it 
+    # dominates and check whether they are in the next front.
+    for(p in Fronts[[i]]){ 
+      # If S[[p]] is empty, then solution p dominates no solutions and we do 
+      # not need to iterate through the inner loop. So a constraint is added to
+      # check if there are any solutions in S[[p]].
+      if(sum(S[[p]])>0){
+        for(q in S[[p]]){
+          # Decrement domination count of each sol q in S[[p]]
+          non_dom_count[q] = non_dom_count[q] - 1
+          if(non_dom_count[q]==0){ #If true then q belongs to next front
+            rank[q] = i + 1
+            Q = c(Q, q)
+          }
+        }
+      }
+    }
+    i = i + 1
+    Fronts[[i]] = Q
+    
+    # Check whether there are still solutions to be assigned 
+    # This can be done by seeing if any non-domination counts are not yet
+    # equal to zero. If all non-domination counts are equal to zero, it means
+    # that all solutions have been assigned a rank and to a front. 
+    if(sum(non_dom_count)==0){ 
+      next_front_not_empty = FALSE
+    }
+  }
+  return(list = list(Rank = rank, Fronts = Fronts))
+}
+
+
+crowding_dist_assign = function(I){
+  # I needs to be a matrix, similar format to P, where the first column 
+  # contains an index of the solutions and the remaining columns contain the 
+  # objective function values for each of the m objectives.
+  
+  if(is.null(nrow(I))){
+    return(c(I[1], Inf))
+  }else{
+    
+    l = dim(I)[1]                     # Number of solutions in I
+    num_objectives = dim(I)[2] - 1    # Number of objectives 
+    
+    #Add a column to matrix I to contained crowding distances for each solution
+    I_sorted = cbind(I, rep(0,l))
+    
+    # Get the column number of the column containing the crowding distances
+    # for indexing purposes. 
+    dist_col = num_objectives+2
+    
+    for(m in 1:num_objectives){
+      
+      # Calculate max and min objective function values
+      f_m_max = max(I_sorted[,m+1])
+      f_m_min = min(I_sorted[,m+1])
+      
+      # Sort the solutions based on objective m
+      order_index = order(I_sorted[,m+1])
+      I_sorted = I_sorted[order_index,]   
+      
+      # Set a distance value of Inf for solutions with max and min for obj m
+      I_sorted[1,dist_col] = Inf
+      I_sorted[l,dist_col] = Inf
+      
+      # The check for more than 2 solutions is to avoid indexing problems in
+      # the for loop. 
+      if(l > 2 & (f_m_max-f_m_min>0)){
+        for(i in 2:(l-1)){
+          I_sorted[i, dist_col] = I_sorted[i, dist_col] + 
+            (I_sorted[i+1,m+1]-I_sorted[i-1,m+1])/(f_m_max-f_m_min)
+        }
+      } else{
+        for(i in 2:(l-1)){
+          I_sorted[i, dist_col] = Inf
+        }
+      }
+    }
+    
+    # Re order I so that solutions are in original index order
+    order_index_normal = order(I_sorted[,1])
+    I_sorted = I_sorted[order_index_normal,]
+    return(I_sorted[,c(1,dist_col)])
+  }
+}
+
+
+## crowd_comp_operator() returns the solution that is preferred between i and j
+crowd_comp_operator = function(i, j){
+  # i and j must be vectors with three components each: solution index, rank 
+  # and crowding distance.
+  
+  i_rank = i[2]    # Get rank of solution i
+  i_crowd = i[3]   # Get crowding distance of solution i 
+  
+  j_rank = j[2]    # Get rank of solution j
+  j_crowd = j[3]   # Get crowding distance of solution j
+  
+  # Determine preferred solution
+  if(i_rank < j_rank){
+    solution_preferred = i  
+  }else if((i_rank==j_rank) & (i_crowd>j_crowd)){
+    solution_preferred = i    
+  }else{
+    solution_preferred = j
+  }
+  return(solution_preferred)
+}
+
+## sort_crowd_comp() takes a set of solutions and sorts them according to the
+## crowd comparison operator. The function returns the sorted set.
+sort_crowd_comp = function(solSet){
+  # solSet is a set of solutions and should be a matrix, with the first column
+  # containing solution indices, the second column containing the rank values 
+  # of these solutions and the third column containing the crowding distance
+  # values for each of the solutions. 
+  
+  # Order the solution set by rank first and then by crowding distance 
+  sorted_by_rank = order(solSet[,2], -solSet[,3]) 
+  
+  return(solSet[sorted_by_rank,])
+}
+
+```
+
+```{r}
+
+evaluate_cost = function(solution_pop, bin_costs, item_profits, numCompulsory){
+  
+  N = nrow(solution_pop)
+  evals = rep(0, N)
+  total_items = length(item_profits)
+  
+  #Remove index column
+  solution_pop = solution_pop[,-1]
+  
+  for(i in 1:N){
+    bins_used = sort(unique(solution_pop[i,]))
+    bin_total_cost = sum(bin_costs[bins_used])
+    
+    if(numCompulsory == num_items){
+      prof_unloaded_nc_items = 0
+    }else{
+      nc_items = solution_pop[i, (numCompulsory+1):total_items]
+      nc_items_profits = item_profits[(numCompulsory+1):total_items]
+      
+      nc_items_not_loaded = which(nc_items==0)
+      prof_unloaded_nc_items = sum(nc_items_profits[nc_items_not_loaded])
+    }
+    evals[i] = bin_total_cost + prof_unloaded_nc_items
+  }
+  return(evals)
+}
+
+evaluate_lateness = function(solution_pop, tau, due_dates, bin_ship_all){
+  
+  N = nrow(solution_pop)
+  evals = rep(0, N)
+  
+  #Remove index column
+  solution_pop = solution_pop[,-1]
+  
+  for(i in 1:N){
+    
+    unallocated_items = which(solution_pop[i,]==0)
+    
+    if(length(unallocated_items)!=0){
+      bin_ship_time = 0*due_dates
+      bin_ship_time[unallocated_items] = 0
+      bin_ship_time[-unallocated_items] = bin_ship_all[solution_pop[i,-unallocated_items]]
+    }else{
+      bin_ship_time = bin_ship_all[solution_pop[i,]]
+    }
+    
+    K_i = bin_ship_time*tau
+    L_i = K_i - due_dates
+    L_max = max(c(L_i,0))
+    
+    evals[i] = L_max
+  }
+  return(evals)
+}
+
+```
+
+
+```{r}
+constraint_violation_calc = function(solution_pop, numCompulsory, item_info, 
+                                     bin_capacitys, totalNumBins){
+
+  #item info is index column plus item weights 
+  N = nrow(solution_pop)
+  violation_score = numeric(N)  # Create space for violation scores
+  
+  #Remove index column
+  solution_pop = solution_pop[,-1]
+  
+  for (i in 1:N){
+    
+    # First constraint - check that all compulsory items are packed
+    items_packed = as.integer(solution_pop[i,]>0)
+    if(numCompulsory>0){
+     c_items_not_packed = numCompulsory - sum(items_packed[1:numCompulsory])
+    }else{
+      c_items_not_packed = 0
+    }
+
+    # Second constraint - check the weight are not more than capacity
+    weight_violation = numeric(totalNumBins)
+    
+    unique_bins = unique(solution_pop[i,])
+
+    for(j in unique_bins){
+
+      if(j > 0){
+        #Check which items are in bin j
+        items_in_bin_j = which(solution_pop[i,]==j) 
+        
+        #Get total weight of items in bin j
+        weight_of_items = sum(item_info[items_in_bin_j,2])
+      
+        #Compare item weight to bin capacity
+        if(weight_of_items>bin_capacitys[j]){
+          weight_violation[j] = 100*(weight_of_items-bin_capacitys[j])
+        }else{
+          weight_violation[j] = 0
+        }
+    }
+    }
+    violation_score[i] = 50*c_items_not_packed + sum(weight_violation)
+  }
+  return(list = list(violation = violation_score))
+}
+
+```
+
+```{r}
+
+initial_pop = function(totalNumItems, totalNumBins, population_size){
+  pop_init = matrix(sample(0:totalNumBins,totalNumItems*population_size,replace=TRUE),
+                    nrow=population_size)
+  
+  pop_initial = cbind(c(1:population_size), pop_init)
+  
+  return(list = list(initial_pop_sol = pop_initial))
+}
+
+
+# Binary tournament selection
+# This function requires a population of solutions, the ranks of these solutions
+# and the constraint violation values for this solutions. 
+
+selection_binary_tourn = function(solution_population, 
+                                  ranks, constraint_violations, crowd_distance){
+  
+  # Remember that the solution_population has a first column with solution indices
+  N = dim(solution_population)[1]
+  
+  selected_parents = matrix(NA, N, dim(solution_population)[2])
+  
+  for(i in 1:N){
+    
+    candidates = sample(1:N, 2)
+    ind1 = candidates[1]
+    ind2 = candidates[2]
+    
+     # First check feasibility. 
+    
+    if(constraint_violations[ind1] < constraint_violations[ind2]){
+      better_sol = ind1
+    } else if (constraint_violations[ind2] < constraint_violations[ind1]){
+      better_sol = ind2
+    } else if(constraint_violations[ind1]==0){
+      if(ranks[ind1]<ranks[ind2]){
+        better_sol = ind1
+      }else if (ranks[ind2]<ranks[ind1]){
+        better_sol = ind2
+      }else if(crowd_distance[ind1]>crowd_distance[ind2]){
+        better_sol = ind1
+      }else{
+        better_sol = ind2   
+      }
+    }else{ #This assumes both are infeasible and violation count is equal, choose one randomly
+      better_sol = sample(candidates, 1)
+    }
+    selected_parents[i,] = solution_population[better_sol,]
+  }
+  return(list = list(selected_parents = selected_parents))
+}
+# Uniform Crossover
+# This function takes in the parents selected using binary tournament selection
+# and returns offspring that are created using parent pairs and uniform crossover.
+
+# Parents will have a solution index that should be removed at this point 
+crossover_uniform = function(parents){
+  
+  #Remove index column
+  parents = parents[,-1]
+  
+  population_size = dim(parents)[1]
+  num_variables = dim(parents)[2]
+  
+  # Pick parents to mate
+  parent_pairs = matrix(sample(1:population_size), population_size/2, 2)
+  
+  # Initialize offspring
+  offsprings = matrix(NA, population_size, num_variables)
+  
+  #Perform crossover
+  for(i in 1:dim(parent_pairs)[1]){
+    # Get parents
+    p1 = parents[parent_pairs[i,][1], ]
+    p2 = parents[parent_pairs[i,][2], ]
+    
+    # Make children
+    c1 = rep(NA, num_variables)
+    c2 = rep(NA, num_variables)
+    
+    # Apply uniform crossover to get children
+    for(j in 1:num_variables){
+      if(runif(1) <= 0.5){
+        c1[j] = p1[j]
+        c2[j] = p2[j]
+      }else{
+        c2[j] = p1[j]
+        c1[j] = p2[j]
+      }
+    }
+    # Store children
+    offsprings[2*i-1, ] = c1
+    offsprings[2*i, ]   = c2
+  }
+  return(list(offspring = offsprings))  
+}
+
+# Mutation 
+# This is done to encourage diversity in solution pop
+# Mutation function takes in the offspring generated from crossover and returns
+# mutated offspring
+
+# When offspring are returned from crossover they do not have an index column
+# as the parents did 
+
+# Swap two items in terms of bins in 
+swap_mutate = function(single_sol){
+  
+  num_items = length(single_sol)
+  swap_items = sample(1:num_items, 2, FALSE)
+  
+  temp_store = single_sol[swap_items[1]]
+  
+  single_sol[swap_items[1]] = single_sol[swap_items[2]]
+  single_sol[swap_items[2]] = temp_store
+  
+  return(list = list(solution = single_sol))
+}
+
+# Move items to new bins a random number of them
+move_mutate_any_bin = function(single_sol, totalNumBins){
+  
+  num_items = length(single_sol)
+  num_items_to_move = sample(1:num_items,1)
+  items_to_move = sample(1:num_items, num_items_to_move)
+  
+  new_bins = sample(0:totalNumBins, num_items_to_move, replace = TRUE)
+  single_sol[items_to_move] = new_bins
+  
+  return(list = list(solution = single_sol))
+}
+
+
+merge_two_bins = function(single_sol){
+  if(length(unique(single_sol))>1){
+    two_bins = sample(unique(single_sol), 2, replace = FALSE)
+    one_bin = sample(two_bins, 1)
+    other_bin = setdiff(two_bins, one_bin)
+    single_sol[which(single_sol == other_bin)] = one_bin
+    return(list = list(solution = single_sol))
+  }else{
+    return(list = list(solution = single_sol))
+  }
+}
+
+split_one_bin = function(single_sol, totalNumBins){
+  unique_bins = unique(single_sol)
+  
+  bins_wih_multi_items = c()
+  
+  # Find a bin with more than one item
+  for(bin in unique_bins){
+    items_in_bin = which(single_sol == bin)
+    if(length(items_in_bin) > 1){
+      bins_wih_multi_items = c(bins_wih_multi_items, bin)
+    }
+  }
+  
+  if(length(bins_wih_multi_items)==0){
+    return(list = list(solution = single_sol))
+  }else{
+    bin_to_split = sample(bins_wih_multi_items, 1)
+ 
+    new_bin = sample(0:totalNumBins, 1)
+    
+    items_in_split_bin = which(single_sol == bin_to_split)
+    
+    # Randomly select half (or roughly half) of the items to move to the new bin
+    split_indices = sample(items_in_split_bin, length(items_in_split_bin) / 2, replace = FALSE)
+    
+    # Assign the new bin to the selected items
+    single_sol[split_indices] = new_bin
+  }
+  # If no bin has more than one item, return the original solution
+  return(list = list(solution = single_sol))
+}
+
+## Make overall mutation 
+
+mutation_swap_move = function(offspring, totalNumBins,
+                              mutation_prob, swap_prob){ 
+  
+  offspring_mutate = matrix(NA, nrow = nrow(offspring), ncol = ncol(offspring))
+  
+  for(i in 1:nrow(offspring)){
+    rn1 = runif(1,0,1)
+    if(rn1 < 0.3){
+    rn = runif(1,0,1)
+    
+    if(rn<=0.2){
+      mutation =swap_mutate(offspring[i,])
+      offspring_mutate[i,] = mutation$solution
+    }else if(rn<=0.5){
+      mutation = merge_two_bins(offspring[i,])
+      offspring_mutate[i,] = mutation$solution
+    }else if(rn<=0.8){
+      mutation = split_one_bin(offspring[i,], totalNumBins)
+      offspring_mutate[i,] = mutation$solution
+    }else{
+      mutation = move_mutate_any_bin(offspring[i,], totalNumBins)
+      offspring_mutate[i,] = mutation$solution
+    }
+    }else{
+      offspring_mutate[i,] = offspring[i,]
+    }
+
+  }
+  return(list = list(offspring_mutate = offspring_mutate))
+}
+
+make_new_pop = function(parent_solution_population,
+                        ranks, constraint_violations, 
+                        totalNumBins, crowd_distance, 
+                        mutation_prob = 0.5, swap_prob = 0.5){
+  
+  #Selection - Binary Tournament Selection 
+  selection = selection_binary_tourn(parent_solution_population, ranks, 
+                                     constraint_violations, crowd_distance)
+  selected_parents = selection$selected_parents
+  
+  #Crossover
+  offspring_together = crossover_uniform(selected_parents)
+  offspring = offspring_together$offspring
+  
+  #Mutation
+  offspring_mutated = mutation_swap_move(offspring, totalNumBins,
+                                         mutation_prob, swap_prob)
+  
+  #Return final offspring pop
+  return(offspring_mutated$offspring_mutate)
+}
+
+
+main_loop = function(Pt, Qt, m, bin_costs, numCompuslory, item_info,
+                     bin_capacitys, totalNumBins, item_profits, 
+                     item_due_dates, bin_ship_time, mutation_prob=0.5, 
+                     swap_prob=0.5){
+  # Pt and Qt are parent and child solutions with the first column being an index
+  
+  N = nrow(Pt)
+  num_items = ncol(Pt) - 1
+  
+  Rt = rbind(Pt, Qt)   # Combine the solutions 
+  
+  #Evaluate the solutions according to the objective functions  
+  Rt_eval = matrix(NA, nrow = 2*N, ncol = m + 2)
+  Rt_eval[,1] = Rt[,1]    # Index column
+  
+  Rt_eval[,3] = evaluate_cost(Rt, bin_costs, item_profits, numCompulsory)
+
+  get_violation_and_corners = constraint_violation_calc(Rt, numCompulsory, item_info,
+                                                        bin_capacitys, totalNumBins)
+  Rt_eval[,4] = get_violation_and_corners$violation
+  
+  Rt_eval[,2] = evaluate_lateness(Rt, tau, item_due_dates, bin_ship_time)
+  
+  # Perform fast non-dominated sort of the combined population objective 
+  # functions Rt to obtain the rank of each solution and therefore 
+  # the front it falls into
+
+  fast_non_dom_sort_Rt = fast_non_dom_sort(Rt_eval)
+  Fronts = fast_non_dom_sort_Rt$Fronts
+  Ranks = fast_non_dom_sort_Rt$Rank
+  
+  # Initialize next parent pop to be empty with 0 solutions in it
+  P_t_plus_1_sols = c()
+  P_t_plus_1_ranks = c()
+  P_t_plus_1_crowd_dist = c()
+  P_t_plus_1_constraint_vals = c()
+  num_in_P_t_plus_1 = 0
+  
+  # Initialize counter for fronts, starting at front 1
+  i = 1
+  
+  # Add solutions to next parent pop P_t+1 until next front cannot fit
+  while(num_in_P_t_plus_1+length(Fronts[[i]]) <= N){
+    
+    # Calculate the crowding distances of the solutions (to be used later)
+    #This should probably be stored?? I'm not sure if this is needed but its in 
+    # pseudo code algorithm
+    
+    crowd_dist_F_i = crowding_dist_assign(Rt_eval[Fronts[[i]],-4]) 
+    
+    solutions_in_front = Rt[Fronts[[i]],]
+    
+    if(is.null(nrow(solutions_in_front))){
+      rep_num = 1
+      crowd_dist_of_sol_in_front = crowd_dist_F_i[2]
+    }else{
+      rep_num = nrow(solutions_in_front)
+      crowd_dist_of_sol_in_front = crowd_dist_F_i[,2]
+    }
+    ranks_of_sol_in_front = rep(i, rep_num)
+    
+    P_t_plus_1_sols = rbind(P_t_plus_1_sols, solutions_in_front)
+    P_t_plus_1_ranks = c(P_t_plus_1_ranks, ranks_of_sol_in_front)
+    P_t_plus_1_crowd_dist = c(P_t_plus_1_crowd_dist, crowd_dist_of_sol_in_front)
+    P_t_plus_1_constraint_vals = c(P_t_plus_1_constraint_vals, Rt_eval[Fronts[[i]], 4])
+    
+    num_in_P_t_plus_1 = nrow(P_t_plus_1_sols)
+    i = i + 1 #increment i to next front
+  }
+  # If the next front F_i cannot all fit into P_t_plus_1 we need to 
+  # decide which of the solutions in F_i should be added to P_t_plus_1
+  # to get to N solutions. The selection is done based on the crowd
+  # comparison operator and sort_crowd_comp() is used. 
+  
+  # To do this the ranks and crowding distances of the solutions in F_i
+  # must be calculated so that the correct format can be input into 
+  # sort_crowd_comp(). Obviously here the rank will be the same because the 
+  # solutions are all in same front. 
+  # Create matrix Front_i with first column being an index column, followed by
+  # a rank column and then a crowding distance column. 
+  
+  if(num_in_P_t_plus_1<N){
+    Front_i = matrix(NA, nrow = length(Fronts[[i]]), ncol = 3)
+    Front_i[,1] = Fronts[[i]]
+    Front_i[,2] = Ranks[Fronts[[i]]]
+    Front_i[,3] = crowding_dist_assign(Rt_eval[Fronts[[i]],])[,2]
+    
+    F_i_sort = sort_crowd_comp(Front_i)
+    F_i_sort_indices = F_i_sort[,1]
+    
+    #Only include the solutions needed to get up to N solutions in P_t_plus_1
+    solutions_F_i_to_include = F_i_sort_indices[1:(N-num_in_P_t_plus_1)]  
+    
+    solutions_to_include_from_Rt = Rt[solutions_F_i_to_include,]
+    solution_ranks = Front_i[Front_i[,1] %in% solutions_F_i_to_include,2]
+    solution_crowd_dist = Front_i[Front_i[,1] %in% solutions_F_i_to_include,3]
+    
+    P_t_plus_1_sols = rbind(P_t_plus_1_sols, solutions_to_include_from_Rt)
+    P_t_plus_1_ranks = c(P_t_plus_1_ranks, solution_ranks)
+    P_t_plus_1_crowd_dist = c(P_t_plus_1_crowd_dist, solution_crowd_dist)
+    P_t_plus_1_constraint_vals = c(P_t_plus_1_constraint_vals, Rt_eval[solutions_F_i_to_include,4])
+  }
+  
+  row.names(P_t_plus_1_sols) = NULL
+  row.names(P_t_plus_1_ranks) = NULL
+  row.names(P_t_plus_1_crowd_dist) = NULL
+  row.names(P_t_plus_1_constraint_vals) = NULL
+  
+  # Use the parents in P_t_plus_1 to create an offspring population
+  Q_t_plus_1 = make_new_pop(P_t_plus_1_sols ,P_t_plus_1_ranks, P_t_plus_1_constraint_vals, 
+                            totalNumBins, P_t_plus_1_crowd_dist, mutation_prob, swap_prob)
+  
+  return(list = list(Parents = P_t_plus_1_sols, 
+                     Children= Q_t_plus_1,
+                     load_imbalance_mean = mean(Rt_eval[,2]), 
+                     cost_mean = mean(Rt_eval[,3])))  
+}
+
+run_t_generations = function(t, parents_sol, children_sol,
+                             m, bin_costs, numCompulsory, item_info, bin_capacitys,
+                             totalNumBins, item_profits, item_due_dates, bin_ship_time,
+                             mutation_prob = 0.5, 
+                             swap_prob = 0.5, gen_store = c(100, 200)){
+  
+  evals_cost = c()
+  evals_load_imbalance = c()
+  
+  prev_generation_parents = list()
+  
+  pb = txtProgressBar(min = 0, max = t, style = 3) 
+  
+  for(i in 1:t){
+    
+    next_gen = main_loop(parents_sol, children_sol, 
+                         m,  bin_costs, 
+                         numCompulsory,item_info, bin_capacitys, 
+                         totalNumBins, item_profits, item_due_dates,
+                         bin_ship_time,
+                         mutation_prob, swap_prob)
+    
+    evals_load_imbalance[i] = next_gen$load_imbalance_mean
+    evals_cost[i] = next_gen$cost_mean
+    
+    parents_sol = next_gen$Parents
+    num_parents = nrow(parents_sol)
+    parents_sol[,1] = 1:num_parents
+    
+    children_sol = next_gen$Children
+    
+    children_sol= cbind(1:num_parents, children_sol)
+    
+    if(i %in% gen_store){
+      #print("yes")
+      index = which(gen_store==i)
+      prev_generation_parents[[index]] = parents_sol
+    }
+    
+    setTxtProgressBar(pb, i)
+    
+  }
+  close(pb) 
+  
+  return(list = list(Parents_t = parents_sol, 
+                     Children_t = children_sol, 
+                     lateness_eval = evals_load_imbalance, 
+                     cost_eval = evals_cost,
+                     prev_generation_parents = prev_generation_parents))
+}
+
+get_init_pop_for_GA = function(LP_x, LP_y, total_num_bins, pop_size,
+                               num_items, numCompulsory){
+  
+  initial_pop = matrix(NA, ncol = num_items, nrow = pop_size)
+  
+  for(s in 1:nrow(initial_pop)){
+    if(numCompulsory>0){
+      for(i in 1:numCompulsory){
+      initial_pop[s,i] = sample(1:total_num_bins, 1, prob = LP_x[i,])
+    }
+    }
+
+    if(numCompulsory!=num_items){
+      for(i in (numCompulsory+1):num_items){
+        if(sum(LP_x[i,])>0){
+          initial_pop[s,i] = sample(1:total_num_bins, 1, prob = LP_x[i,])
+        }else{
+          initial_pop[s,i] = 0
+        }
+      }
+    }
+  }
+  
+  for(s in 1:nrow(initial_pop)){
+    num_items_to_move = sample(1:(num_items/4), 1)
+    items_to_move = sample(1:num_items, num_items_to_move, replace = FALSE)
+    
+    initial_pop[s, items_to_move] = sample(0:total_num_bins, num_items_to_move, 
+                                           replace = TRUE)
+  }
+  
+  return(initial_pop)
+}
+```
